@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf8">
+<title>Arduino Online Edition</title>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+<link rel="stylesheet" href="/bootstrap/css/bootstrap.css">
+<script src="/bootstrap/js/bootstrap.min.js"></script>
+<script src="bootbox.min.js"></script>
+<style type="text/css" media="screen">
+	#editor { 
+		position: absolute;
+		top: 50px;
+		right: 0;
+		bottom: 0;
+		left: 0;
+	}
+	#topbar {
+		position: absolute;
+		top: 1%;
+		bottom: 1%;
+		left: 1%;
+	}
+	.errored {
+		background-color: red;
+	}
+</style>
+<script type="text/javascript">
+	var xmlhttp = new XMLHttpRequest();
+	var mainFileContent = "void setup() {\n	\n}\n\nvoid loop() {\n	\n}"
+	var files = [{"filename": "main.ino", "content": mainFileContent}];
+	var editor;
+	var session;
+	var chosen = 0;
+	var boards = [{name: "Arduino Uno / Duemillanove with atmega328", mcu: "atmega328p", f_cpu: "16000000L"},{name: "Arduino Duemillanove with atmega168", mcu: "atmega168", f_cpu: "16000000L"},{name: "AtTiny85 (8MHz)", mcu: "attiny85", f_cpu: "8000000L"}];
+	var selectedBoard = 0;
+
+	function begin() {
+		editor = ace.edit("editor");
+		editor.setTheme("ace/theme/tomorrow_night_bright");
+		//editor.setOptions({enableBasicAutocompletion: true});
+		editor.setShowPrintMargin(false);
+		editor.setFontSize(16);
+		editor.setHighlightActiveLine(false);
+		session = ace.createEditSession("","ace/mode/c_cpp");
+		editor.setSession(session);
+		updateFiles(chosen);
+		updateBoards(selectedBoard);
+		editor.on("change",function(e) {
+			files[chosen].content = editor.getValue();
+		}); //save it to file
+		// TOpossiblyDO: move this to onCompile and onChangeTab-type scenarios
+	}
+
+	function addFile() {
+		// add the file please thank you (probably add to an array and then refresh the dropdown (if it needs it))
+		bootbox.prompt("<h3>What should this new file be called?</h3>", function(res) {
+			if(res === null || res == " ") {
+				bootbox.alert("<h3>File not created (you didn't choose a filename)</h3>");
+			} else {
+				files.push({"filename": res, "content": ""});
+				chosen = files.length-1;
+				updateFiles(chosen);
+			}
+		});
+	}
+
+	function updateFiles(selected) {
+		chosen = selected;
+		console.log("updating "+selected);
+		var finalHtml = '';
+		for(var i=0;i<files.length;i++) {
+			if(i==selected) {
+				document.getElementById("dropdown").innerHTML=files[i].filename+"<span class='caret'></span>";
+				editor.setValue(files[i].content);
+			}
+			finalHtml = finalHtml + "<li id='file"+i+"'><a href='#' onclick='updateFiles("+i+")'>"+files[i].filename+"</a></li>";
+		}
+		finalHtml += "<li id='newFile'><a href='#' onclick='addFile()'>Add new file...</a></li>\n<li id='removeSelected'><a href='#' onclick='removeFile()'>Remove selected file...</a></li>";
+		document.getElementById("allTheList").innerHTML = finalHtml;
+	}
+
+	function removeFile() {
+		if(chosen==0) {
+			bootbox.alert("<h3>You can't remove the main file!</h3>");
+		} else {
+			bootbox.confirm("<h3>Would you like to delete '"+files[chosen].filename+"'?</h3>", function(result) {
+				if(result) {
+					files.splice(chosen,chosen);
+					updateFiles(chosen-1);
+				}
+			});
+		}
+	}
+
+	function updateBoards(board) {
+		selectedBoard = board;
+		document.getElementById("boardDrop").innerHTML = boards[selectedBoard].name+"<span class='caret'></span>";
+	}
+
+	function compile() {
+		// files: files;
+		var lengthOfFiles = 0;
+		for(var i=0;i<files.length;i++) {
+			var add = (files[i].content+"\n").match(newLine);
+			lengthOfFiles += add ? add.length : 1;
+		}
+		for(var i=0;i<lengthOfFiles;i++) {
+			editor.getSession().removeGutterDecoration(i,"errored");
+		}
+		var finalData = "";
+		for(var i=0;i<files.length;i++) {
+			finalData=finalData+files[i].content+"\n\n";
+		}
+		var result = verify(finalData);
+		if(result.error) {
+			var pos = result.line;
+			var file = -1;
+			while(pos>0) {
+				file++;
+				var len = (files[file].content+"\n").match(newLine);
+				pos -= len ? len.length : 1;
+				pos--;
+			}
+			pos++;
+			pos-=file;
+			pos += (files[file].content+"\n").match(newLine).length;
+			updateFiles(file);
+			console.log("line "+pos+" in file "+files[file].filename+": "+result.error);
+			editor.scrollToLine(result.line,true,true);
+			editor.getSession().addGutterDecoration(result.line-1,"errored");
+			bootbox.alert("<h3>Error on line "+pos+" in file "+files[file].filename+": "+result.error+"</h3>");
+			return false;
+		}
+		var DATA = {
+			"files": [{"filename": "main.ino", "content": finalData}],
+			"libraries": {},
+			"format": "hex",
+			"version": "105",
+			"build": {
+				"mcu": boards[selectedBoard].mcu,
+				"f_cpu": boards[selectedBoard].f_cpu,
+				"core": "arduino",
+				"variant": "standard"
+			}
+		};
+		var returnedThing = "";
+		console.log(DATA);
+		DATA = JSON.stringify(DATA);
+		xmlhttp.open("POST","/compiler/index.php",true);
+		xmlhttp.onreadystatechange = function () {
+			if(xmlhttp.readyState == 4 && xmlhttp.status == 200) {
+				returnedThing = JSON.parse(xmlhttp.responseText);
+				if(returnedThing.output) {
+					console.log(returnedThing.output);
+					bootbox.alert("<h3>Compilation Successful!</h3>");
+				} else {
+					console.log(returnedThing);
+					bootbox.alert("<h3>Compilation Failed (for some reason)</h3>");
+				}
+			}
+		}
+		xmlhttp.send(DATA);
+	}
+
+	var newLine = /[^\n]+(?=\n)/g; //returns each line MINUS the \n
+	var semi = /;\s*$/; //semicolon possibly followed by spaces
+	var openCurly = /\{\s*$/; //open bracket followed by spaces (possibly)
+	var closeCurly = /^\s*\}/; //close a bracket at the start
+	var closeCurly2 = /\}\s*$/; //close a bracket at the end
+	var beginsWithDefine = /^\s*\#\w+/; //starts with #something
+	var notBlank = /\S+/; //matches any non-space
+	var emptyLine = /^\n/mg; //find a line with only a newline
+
+	function verify(code) {
+		var code2 = code.replace(emptyLine," \n");
+		var lines = (code2+"\n").match(newLine);
+		for(var i=0;i<lines.length;i++) {
+			if(!(semi.test(lines[i]) || openCurly.test(lines[i]) || closeCurly.test(lines[i]) || closeCurly2.test(lines[i]) || beginsWithDefine.test(lines[i]) || !notBlank.test(lines[i]))) return {"error": "Missing an operand. Perhaps you missed a semicolon, or a curly bracket?","line": i+1}; // return the human-readable line number as an error
+		}
+		//ok there aren't any stupid errors (lacking semicolon or correct curly brackets)
+		//let's make sure that there are enough curly brackets...
+		var opened = code2.match(/\{/g);
+		var closed = code2.match(/\}/g);
+		opened = opened ? opened.length : 0;
+		closed = closed ? closed.length : 0;
+		if(opened != closed) {
+			var error = opened>closed ? "There are "+(opened-closed)+" more open brackets than needed! " : "There are "+(closed-opened)+" more closed brackets than needed! ";
+			if(opened-closed==1) error = "There is 1 more open bracket than needed! ";
+			if(closed-opened==1) error = "There is 1 more closed bracket than needed! ";
+			var line;
+			if(opened>closed) {
+				// var toget = opened - closed;
+				var reg = /\{/g;
+				for(var i=1;i<closed;i++) reg.exec(code2);
+				var pos = reg.exec(code2).index+1;
+				var sub = code2.substring(0,pos);
+				line = sub.match(/\n/g);
+			} else {
+				// var toget = closed - opened;
+				var reg = /\}/g;
+				for(var i=1;i<opened;i++) reg.exec(code2);
+				var pos = reg.exec(code2).index+1;
+				var sub = code2.substring(0,pos);
+				line = sub.match(/\n/g);
+			}
+			if(line==null) {
+				line = 1;
+			} else {
+				line = line.length+1;
+			}
+			return {"error": error + "Please check your curly brackets!", "line": line};
+		}
+		//now normal brackets
+		opened = code2.match(/\(/g);
+		closed = code2.match(/\)/g);
+		opened = opened ? opened.length : 0;
+		closed = closed ? closed.length : 0;
+		if(opened != closed) {
+			var error = opened>closed ? "There are "+(opened-closed)+" more open brackets than needed! " : "There are "+(closed-opened)+" more closed brackets than needed! ";
+			if(opened-closed==1) error = "There is 1 more open bracket than needed! ";
+			if(closed-opened==1) error = "There is 1 more closed bracket than needed! ";
+			var line;
+			if(opened>closed) {
+				// var toget = opened - closed;
+				var reg = /\(/g;
+				for(var i=1;i<closed;i++) reg.exec(code2);
+				var pos = reg.exec(code2).index+1;
+				var sub = code2.substring(0,pos);
+				line = sub.match(/\n/g);
+			} else {
+				// var toget = closed - opened;
+				var reg = /\)/g;
+				for(var i=1;i<opened;i++) reg.exec(code2);
+				var pos = reg.exec(code2).index+1;
+				var sub = code2.substring(0,pos);
+				line = sub.match(/\n/g);
+			}
+			if(line==null) {
+				line = 1;
+			} else {
+				line = line.length+1;
+			}
+			return {"error": error + "Please check your brackets!", "line": line};
+		}
+		//now square brackets
+		opened = code2.match(/\[/g);
+		closed = code2.match(/\]/g);
+		opened = opened ? opened.length : 0;
+		closed = closed ? closed.length : 0;
+		if(opened != closed) {
+			var error = opened>closed ? "There are "+(opened-closed)+" more open brackets than needed! " : "There are "+(closed-opened)+" more closed brackets than needed! ";
+			if(opened-closed==1) error = "There is 1 more open bracket than needed! ";
+			if(closed-opened==1) error = "There is 1 more closed bracket than needed! ";
+			var line;
+			if(opened>closed) {
+				// var toget = opened - closed;
+				var reg = /\[/g;
+				for(var i=1;i<closed;i++) reg.exec(code2);
+				var pos = reg.exec(code2).index+1;
+				var sub = code2.substring(0,pos);
+				line = sub.match(/\n/g);
+			} else {
+				// var toget = closed - opened;
+				var reg = /\]/g;
+				for(var i=1;i<opened;i++) reg.exec(code2);
+				var pos = reg.exec(code2).index+1;
+				var sub = code2.substring(0,pos);
+				line = sub.match(/\n/g);
+			}
+			if(line==null) {
+				line = 1;
+			} else {
+				line = line.length+1;
+			}
+			return {"error": error + "Please check your square brackets!", "line": line};
+		}
+		return true; //success! (still more to go above this (yes, that's a TODO))
+	}
+
+	function about() {
+		bootbox.dialog({
+			message: "This is a TWSU project that allows anyone with an Arduino and some extra equipment to program it anywhere. This uses sound to transfer data rather than a standard USB cable, allowing mobile devices to also upload to an Arduino board.",
+			title: "Arduino Online Edition: An Arduino IDE for all devices with web access"
+		})
+	}
+
+	function search() {
+		var searched = document.getElementById("searchbar").value;
+		if(searched!="") {
+			editor.findAll(searched);
+		} else {
+			editor.clearSelection();
+		}
+	}
+
+</script>
+</head>
+<body onload="begin();">
+<span id="topbar">
+<ul class="nav nav-pills" role="tablist">
+<li class="disabled"><a href="#">Arduino Online IDE</a></li>
+<li class="active">
+	<a class="dropdown-toggle" data-toggle="dropdown" href="#" id="dropdown">
+	</a>
+	<ul class="dropdown-menu" role="menu" id="allTheList">
+		<!-- the list is added by javascript -->
+	</ul>
+</li>
+<li>
+<a class="dropdown-toggle" data-toggle="dropdown" href="#" id="boardDrop">
+</a>
+<ul class="dropdown-menu dropdown-info" role="menu" id="allTheBoards">
+<li id="at328"><a href="#" onclick="updateBoards(0)">Arduino Uno / Duemillanove with atmega328</a></li>
+<li id="at168"><a href="#" onclick="updateBoards(1)">Arduino Duemillanove with atmega168</a></li>
+<li id="attiny"><a href="#" onclick="updateBoards(2)">AtTiny85 (8MHz)</a></li>
+</ul>
+</li>
+<li id="compiler"><a href="#" onclick="compile()">Compile</a></li>
+<li><a href="#" onclick="about()">About</a></li>
+<li><input type="text" class="form-control" placeholder="Find..." id="searchbar" onchange="search()"></li>
+</ul>
+</span>
+<div id="editor"></div>
+<script src="/ace-builds/src/ace.js" type="text/javascript" charset="utf-8"></script>
+</body>
+</html>
